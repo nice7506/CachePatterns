@@ -43,6 +43,78 @@ Stop everything with `docker compose down`.
 
 Each response includes metadata (`cacheHit`, `durationMs`, `cacheKey`, etc.) so you can see whether Redis served the request or Postgres did.
 
+## Route dry runs (flow explanation)
+
+High-level, every route goes: `Express route` → `service` → `Postgres + Redis` → JSON response with timing + cache metadata. Below is what happens for each key endpoint when things go well.
+
+- `GET /api/products`
+  - Express handler calls `getAllProducts` in `src/repositories/productRepository.js`.
+  - A single SQL query runs against Postgres and returns all rows.
+  - Response is a plain array of products (no Redis or extra metadata).
+
+- `GET /api/cache-aside/products/:id`
+  - Route parses `:id` and calls `getProductCacheAside(id)`.
+  - Service builds key `cache-aside:product:<id>` and checks Redis.
+  - On cache hit: returns cached product with `cacheHit: true` and `durationMs` based on how fast Redis responded.
+  - On cache miss: reads from Postgres; if found, writes that product into Redis with a TTL, then returns it with `cacheHit: false`.
+
+- `PUT /api/cache-aside/products/:id`
+  - Route validates `id` and `price`, then calls `updateProductCacheAside(id, price)`.
+  - Service updates the product row in Postgres.
+  - After DB success, it deletes the Redis key `cache-aside:product:<id>` so the next read reloads fresh data.
+
+- `GET /api/write-through/products/:id`
+  - Route parses `id` and calls `getProductWriteThrough(id)`.
+  - Service checks Redis key `write-through:product:<id>`.
+  - If present, returns cached product with `cacheHit: true`.
+  - If missing, fetches from Postgres; response includes a `note` describing that the miss was handled by the DB (code includes an example of how you’d also populate the cache here).
+
+- `PUT /api/write-through/products/:id`
+  - Route validates `id` and numeric `price`, then calls `updateProductWriteThrough(id, price)`.
+  - Service updates Postgres; if the product exists, it immediately writes the updated product into Redis under `write-through:product:<id>`.
+  - Response includes `cacheUpdated: true` plus `durationMs` for the whole DB+cache write.
+
+- `GET /api/write-back/products/:id`
+  - Route parses `id` and calls `getProductWriteBack(id)`.
+  - Service reads value from Redis key `write-back:product:<id>` and a separate “dirty” flag key.
+  - On cache hit: returns cached product with `cacheHit: true` and `pendingWrite` set from the dirty flag, plus a `note` telling you whether Redis is ahead of Postgres.
+  - On cache miss: loads from Postgres (if it exists), writes it into Redis, and returns with `pendingWrite: false`.
+
+- `PUT /api/write-back/products/:id`
+  - Route validates `id` and `price`, then calls `updateProductWriteBack(id, price)`.
+  - Service either uses the cached product or loads it once from Postgres.
+  - It updates the product object in Redis, sets the dirty flag key, and pushes a `{ id, price }` payload onto the Redis list queue `write-back:queue`.
+  - Response shows the updated product, `pendingWrite: true`, and `queued: true` to indicate the DB update will happen asynchronously.
+  - Separately, `src/workers/writeBackFlusher.js` drains the queue, applies updates to Postgres, rewrites the cache with the DB row, and clears the dirty flag.
+
+- `GET /api/hybrid/products/:id`
+  - Route parses `id` and calls `getProductHybrid(id)`.
+  - Service acts like cache-aside with TTL: it checks Redis key `hybrid:product:<id>`, returns from cache if present, otherwise loads from Postgres and stores the result in Redis with a TTL.
+  - Response includes a `note` explaining whether it was served from Redis or primed from the database.
+
+- `PUT /api/hybrid/products/:id`
+  - Route validates `id` and `price`, then calls `updateProductHybrid(id, price)`.
+  - Service updates Postgres first, then writes the updated product into Redis under `hybrid:product:<id>` with a TTL (write-through style).
+  - Response indicates whether the cache was updated and includes a `note` summarising the hybrid behaviour.
+
+## Why caching? (system design view)
+
+At a system design level, caching means keeping a copy of data in a faster but usually smaller storage layer (like Redis or an in‑memory map) so you do not have to hit slower or more expensive backends (like Postgres, external APIs, or disk) on every request.
+
+**Why caches are useful**
+- Reduce latency: serving from RAM/Redis is often 10–100x faster than going to a database or remote service.
+- Increase throughput: offloading repeated reads from the database lets a system handle many more requests with the same hardware.
+- Protect dependencies: a cache can shield downstream databases or APIs from traffic spikes (thundering herd), acting as a buffer.
+- Save money: fewer calls to managed databases or third‑party APIs can reduce per‑query or per‑IO costs.
+
+**Common downsides and risks**
+- Stale data: cached values can become outdated if invalidation is wrong or delayed, leading to inconsistent views of the truth.
+- Complexity: you now have to think about cache keys, TTLs, invalidation rules, and “what if cache and DB disagree?”.
+- Failure modes: if the cache is down, misconfigured, or too small, the database may suddenly see a surge in traffic.
+- Consistency trade‑offs: write‑back / asynchronous patterns intentionally accept “eventual consistency” between cache and database.
+
+This project exists to show how different cache strategies navigate these trade‑offs, not to say “cache everything”. You still choose what to cache, for how long, and how important fresh data is for your use case.
+
 ## Caching patterns overview
 
 The three strategies in this repo all use the same underlying pieces (Postgres for persistence, Redis for caching) but differ in when they read/write to cache versus database.
