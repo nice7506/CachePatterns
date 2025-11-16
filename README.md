@@ -38,6 +38,8 @@ Stop everything with `docker compose down`.
 - `GET /api/write-back/products/:id` – fetch product backed by a write-back cache, including dirty-state metadata.
 - `PUT /api/write-back/products/:id` – queue a write-back update (cache updates immediately, DB flushes asynchronously).
 - `GET /api/compare/products/:id?iterations=5&coldStart=true` – run repeated reads against all patterns to compare hit rates and timing. Set `coldStart=false` to observe steady-state cache hits.
+- `GET /api/hybrid/products/:id` – hybrid endpoint that uses cache-aside-style reads and write-through-style writes.
+- `PUT /api/hybrid/products/:id` – update via hybrid strategy (DB + cached value with TTL).
 
 Each response includes metadata (`cacheHit`, `durationMs`, `cacheKey`, etc.) so you can see whether Redis served the request or Postgres did.
 

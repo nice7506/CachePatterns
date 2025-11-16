@@ -1,0 +1,84 @@
+@baseUrl = http://localhost:3000
+@productId = 1
+@newPrice = 99.99
+
+###
+# Root health check
+GET {{baseUrl}}/
+Accept: application/json
+
+###
+# API docs
+GET {{baseUrl}}/api/docs
+Accept: application/json
+
+###
+# List all products (from Postgres)
+GET {{baseUrl}}/api/products
+Accept: application/json
+
+###
+# Cache-aside: get product (cold / warm)
+GET {{baseUrl}}/api/cache-aside/products/{{productId}}
+Accept: application/json
+
+###
+# Cache-aside: update product price (DB first, then invalidate cache)
+PUT {{baseUrl}}/api/cache-aside/products/{{productId}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "price": {{newPrice}}
+}
+
+###
+# Write-through: get product (reads via cache, falls back to DB)
+GET {{baseUrl}}/api/write-through/products/{{productId}}
+Accept: application/json
+
+###
+# Write-through: update product price (DB + cache together)
+PUT {{baseUrl}}/api/write-through/products/{{productId}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "price": {{newPrice}}
+}
+
+###
+# Write-back: get product (includes pendingWrite metadata)
+GET {{baseUrl}}/api/write-back/products/{{productId}}
+Accept: application/json
+
+###
+# Write-back: update product price (cache now, DB later via worker)
+PUT {{baseUrl}}/api/write-back/products/{{productId}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "price": {{newPrice}}
+}
+
+###
+# Hybrid: get product (cache-aside-style read with TTL)
+GET {{baseUrl}}/api/hybrid/products/{{productId}}
+Accept: application/json
+
+###
+# Hybrid: update product price (write-through-style update with TTL)
+PUT {{baseUrl}}/api/hybrid/products/{{productId}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "price": {{newPrice}}
+}
+
+###
+# Compare all patterns for a given product
+GET {{baseUrl}}/api/compare/products/{{productId}}?iterations=5&coldStart=true
+Accept: application/json
+

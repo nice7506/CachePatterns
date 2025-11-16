@@ -2,6 +2,7 @@ import { Router } from "express";
 import cacheAsideRouter from "./cacheAside.js";
 import writeThroughRouter from "./writeThrough.js";
 import writeBackRouter from "./writeBack.js";
+import hybridRouter from "./hybrid.js";
 import { getAllProducts } from "../repositories/productRepository.js";
 import { connectRedis } from "../config/redisClient.js";
 import { getProductCacheAside } from "../services/cacheAsideService.js";
@@ -67,6 +68,12 @@ router.get("/docs", (req, res) => {
       writeBack: {
         read: "GET /api/write-back/products/:id",
         update: "PUT /api/write-back/products/:id",
+      },
+      hybrid: {
+        read: "GET /api/hybrid/products/:id",
+        update: "PUT /api/hybrid/products/:id",
+        description:
+          "Hybrid endpoint: cache-aside style reads with write-through style writes.",
       },
       comparison: {
         read:
@@ -208,5 +215,6 @@ router.get("/compare/products/:id", async (req, res, next) => {
 router.use("/cache-aside", cacheAsideRouter);
 router.use("/write-through", writeThroughRouter);
 router.use("/write-back", writeBackRouter);
+router.use("/hybrid", hybridRouter);
 
 export default router;
